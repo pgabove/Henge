@@ -47,6 +47,5 @@ jobs:
         with:
           name: unsigned-ipa
           path: build/*.ipa
-          archive: false        # downloads as Henge.ipa itself, nothing to unzip on the iPad
           if-no-files-found: error
           retention-days: 14
