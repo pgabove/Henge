@@ -1,0 +1,52 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:        # lets you trigger it manually from the Actions tab
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27       # Henge needs Xcode 27 or later (README > Building)
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      # 1) Check out the repo this workflow lives in
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 2) Install XcodeGen
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # 3-5) Henge's own CI script (ci/build-bitrise.sh). It builds what Henge links
+      #      (Husk's libslirp/glib/pairing, StikJIT, the installer, the engine), then runs
+      #      ios/scripts/package_ipa.sh: xcodegen generate, xcodebuild with
+      #      CODE_SIGNING_ALLOWED=NO, and the Payload folder zipped into ~/Desktop/Henge.ipa
+      - name: Build Henge.ipa
+        env:
+          BITRISE_SOURCE_DIR: ${{ github.workspace }}
+          BITRISE_DEPLOY_DIR: ${{ runner.temp }}/deploy
+        run: bash ci/build-bitrise.sh
+
+      - name: Collect IPA
+        run: |
+          set -euxo pipefail
+          mkdir -p build
+          cp "$HOME/Desktop/Henge.ipa" build/Henge.ipa
+          ls -lh build/Henge.ipa
+
+      # 6) Upload the .ipa as a downloadable artifact
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-ipa
+          path: build/*.ipa
+          archive: false        # downloads as Henge.ipa itself, nothing to unzip on the iPad
+          if-no-files-found: error
+          retention-days: 14
