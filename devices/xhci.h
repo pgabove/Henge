@@ -6,15 +6,18 @@
 #include "pcie.h"
 
 /* An xHCI USB host controller (xHCI 1.0, one interrupter, 32-byte contexts,
-   INTx) with two USB HID devices: a boot keyboard on port 1 and a Magic
+   INTx) with up to three USB HID devices: a boot keyboard on port 1 and a Magic
    Trackpad 2 on port 2: what Virtualization.framework gives a macOS guest as
    its "Virtual USB Keyboard", plus Apple's multitouch pad, so the guest's
-   own gesture engine sees a real trackpad. Changes come from the host UI on
-   any thread (hv_xhci_key, hv_xhci_touch); the CPU thread delivers them
-   (hv_xhci_poll). */
+   own gesture engine sees a real trackpad. Port 3 is empty unless the host asked
+   for a touchscreen (hv_xhci_set_touchscreen): then it holds what a USB touch
+   monitor's panel is to a computer, a HID multi-touch touchscreen that is a
+   pointer on the screen until the host asks it for touches. Changes come from
+   the host UI on any thread (hv_xhci_key, hv_xhci_touch, hv_xhci_ts_touch,
+   hv_xhci_ts_pointer); the CPU thread delivers them (hv_xhci_poll). */
 #define HV_XHCI_SLOTS 8
-#define HV_XHCI_PORTS 2
-#define HV_XHCI_DEVICES 2
+#define HV_XHCI_PORTS 3
+#define HV_XHCI_DEVICES 3
 #define HV_XHCI_INTRS 4
 #define HV_XHCI_EPS 32 /* device context index 1..31 */
 #define HV_XHCI_REPORTS 256
@@ -26,6 +29,18 @@
 #define HV_TP_FINGERS 10
 #define HV_TP_REPORTS 64
 #define HV_TP_REPORT_LEN (12 + 9 * HV_TP_FINGERS) /* report ID 2: 12-byte prefix, N x 9-byte fingers */
+
+/* The touchscreen, as the HID multi-touch digitizer every USB touch monitor is: coordinates are
+   0..HV_TS_MAX across the Mac's screen, left to right and top to bottom. */
+#define HV_TS_MAX 32767
+#define HV_TS_FINGERS 5
+#define HV_TS_REPORTS 64
+#define HV_TS_REPORT_LEN (1 + 6 * HV_TS_FINGERS + 2 + 1) /* report ID 1: six bytes a contact, the scan time, the contact count */
+#define HV_TS_POINTER_LEN 6                              /* report ID 3: the buttons, X and Y */
+/* What it reports as (hv_xhci_ts_mode). */
+#define HV_TS_MODE_NONE 0    /* there is none, or the guest has not set it up */
+#define HV_TS_MODE_POINTER 1 /* a pointer at a place on the screen, with buttons (report 3) */
+#define HV_TS_MODE_TOUCH 2   /* fingers (report 1): the guest asked for them */
 
 typedef struct HvXhciRing {
     uint64_t dequeue; /* guest PA of the next TRB */
@@ -52,7 +67,7 @@ typedef struct HvXhci {
     /* device slots: -1 until the device on the slot's port is addressed */
     int slot_used[HV_XHCI_SLOTS + 1];
     struct HvXhciSlot {
-        int dev;         /* 0 keyboard, 1 trackpad, -1 none */
+        int dev;         /* 0 keyboard, 1 trackpad, 2 touchscreen, -1 none */
         int configured;
         HvXhciRing ep[HV_XHCI_EPS];
         int ep_running[HV_XHCI_EPS];
@@ -83,6 +98,27 @@ typedef struct HvXhci {
     uint32_t tp_multi_logs; /* multi-finger deliveries logged, capped */
     uint8_t tp_f1[8];   /* feature report 1: the header for the selected sensor register */
     int tp_f1_len;
+    /* The touchscreen on port 3, when there is one: the fingers on the Mac's screen and their
+       reports (report ID 1: the contacts in use first, then the scan time and how many there are). */
+    int ts_present;
+    struct HvTsContact {
+        int in;        /* goes in the next report */
+        int id;        /* contact identifier, 1..15, the same for as long as the finger stays down */
+        int x, y;      /* 0..HV_TS_MAX */
+        int down;      /* touching; 0 in the one report that says the finger lifted */
+    } ts_contacts[HV_TS_FINGERS];
+    uint32_t ts_scan;      /* the last report's scan time, in 100 us (the report carries its low 16 bits) */
+    int ts_touches;        /* the guest set the device mode to touches (or HV_TS_MODE did): report 1, not 3 */
+    int ts_mode_fixed;     /* HV_TS_MODE chose: what the guest asks for changes nothing */
+    int ts_px, ts_py, ts_buttons; /* as a pointer: where it last pointed and the buttons held */
+    int ts_tail_move;      /* the newest waiting report is a pointer's move (no button changed in it): the next move may replace it */
+    uint8_t ts_reports[HV_TS_REPORTS][HV_TS_REPORT_LEN];
+    uint8_t ts_rlen[HV_TS_REPORTS];
+    uint32_t ts_rhead, ts_rtail;
+    uint32_t ts_guest_down; /* bit per contact identifier: the guest was last told this finger is down */
+    uint64_t ts_delivered;
+    uint32_t ts_reqs;       /* control requests logged, capped */
+    uint32_t ts_drops;      /* touches dropped because nothing reads the touchscreen, logged capped */
 } HvXhci;
 
 HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus);
@@ -102,6 +138,22 @@ void hv_xhci_touch(HvXhci *x, int id, int phase, int px, int py, uint32_t ts_ms)
 void hv_xhci_touch_frame(HvXhci *x, uint32_t ts_ms);
 /* Any thread: the pad's full press (a click), down or up. */
 void hv_xhci_touch_button(HvXhci *x, int down);
+/* Before hv_xhci_create: whether the Mac gets the touchscreen on port 3, and the size in mm of the
+   screen it covers (0, 0: unknown). */
+void hv_xhci_set_touchscreen(int on, uint32_t width_mm, uint32_t height_mm);
+/* Any thread: a finger on the touchscreen. phase: 0 down, 1 move, 2 up. id: a stable 1..15 for this
+   touch; x, y 0..HV_TS_MAX across the Mac's screen. As with the trackpad, down and up report at
+   once and a move only updates the finger: hv_xhci_ts_frame commits one report for all the fingers
+   that moved together. ts_ms is the touch sample's own clock (ms). */
+void hv_xhci_ts_touch(HvXhci *x, int id, int phase, int px, int py, uint32_t ts_ms);
+void hv_xhci_ts_frame(HvXhci *x, uint32_t ts_ms);
+/* Any thread: every finger is off the touchscreen (the session lost its touches). */
+void hv_xhci_ts_release_all(HvXhci *x, uint32_t ts_ms);
+/* Any thread: the touchscreen as a pointer (what it is to a host that has not asked for touches, which
+   is every macOS so far): it points at px, py with these buttons down (bit 0 left, 1 right, 2 middle). */
+void hv_xhci_ts_pointer(HvXhci *x, int px, int py, int buttons);
+/* Any thread: HV_TS_MODE_*, so the host UI knows whether to send fingers or a pointer. */
+int hv_xhci_ts_mode(HvXhci *x);
 /* CPU thread: hand waiting reports to the guest. */
 void hv_xhci_poll(HvXhci *x);
 

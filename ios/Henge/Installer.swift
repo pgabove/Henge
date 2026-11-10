@@ -21,6 +21,11 @@ struct MacOSRelease: Identifiable, Hashable {
         MacOSRelease(id: "26B123", name: "macOS 27.2",
                      url: URL(string: "https://updates.cdn-apple.com/2026FallFCS/c9671975-52db-4fb5-9af2-00217169ba8d/UniversalMac_27.2_26B123_Restore.ipsw")!,
                      bytes: 24_409 << 20, note: "The newest. Not tested with Henge yet."),
+        /* A developer beta, from Apple's seed CDN: the first build the touchscreen MacBook Pro shares with every
+           other Mac (27.2 for it was a build of its own, 26B8125). The size is an estimate: the download shows the real one. */
+        MacOSRelease(id: "26C5035r", name: "macOS 27.3 beta 1",
+                     url: URL(string: "https://updates.cdn-apple.com/2026FallSeed/53df7654-4865-4259-8dae-30177b76f104/UniversalMac_27.3_26C5035r_Restore.ipsw")!,
+                     bytes: 24_600 << 20, note: "A developer beta. Not tested with Henge."),
     ]
 }
 

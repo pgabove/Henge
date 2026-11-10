@@ -14,6 +14,9 @@ struct SettingsView: View {
     @AppStorage(EngineTuning.wfiSpinKey) private var wfiSpin = false
     @AppStorage(EngineTuning.superblocksKey) private var superblocks = false
     @AppStorage(JITBootstrap.codeCacheKey) private var codeCacheMB = JITBootstrap.defaultCodeCacheMB
+    @AppStorage(Trackpad.directTouchKey) private var directTouch = false
+    @AppStorage(Trackpad.nativeTouchKey) private var nativeTouch = false
+    @AppStorage(BackgroundPause.key) private var pauseInBackground = true
 
     /// The second footer paragraph: how you click, given the selected input mode.
     private var inputDescription: String {
@@ -96,6 +99,23 @@ struct SettingsView: View {
                     }
                     .listRowBackground(Desk.card)
                 }
+                Section("Touchscreen") {
+                    Toggle("Touch the Mac's screen directly", isOn: $directTouch)
+                    Text("Off, the screen is the Mac's trackpad. On, the Mac also has a USB touchscreen, as a touch monitor's panel is one, and a finger acts where it lands on the Mac's picture: tap to click there, move to drag, stay put for a right click. Two fingers scroll and pinch what is under them, and a two-finger tap is a right click. Four fingers still show Henge's controls. Applies the next time a Mac starts.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if directTouch {
+                        Toggle("Give macOS the touches if it asks", isOn: $nativeTouch)
+                        Text("Experimental. A touch panel is a pointer until its host asks it for the touches themselves, and then sends every finger as it is. No macOS is known to act on a USB panel's touches yet: if the Mac stops answering your fingers with this on, turn it off.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .listRowBackground(Desk.card)
+                Section("Background") {
+                    Toggle("Pause the Mac when Henge is out of sight", isOn: $pauseInBackground)
+                    Text("The Mac stops where it is when you leave Henge and carries on when you come back; its clock does not see the time away. Off, a Mac playing sound keeps running in the background and iOS freezes any other. iOS can still close Henge while it is away if it needs the memory, so save your work on the Mac first.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                .listRowBackground(Desk.card)
                 Section("Performance") {
                     Picker("Mac refresh rate", selection: $refreshRate) {
                         Text("30 Hz").tag(30)

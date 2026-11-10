@@ -27,6 +27,11 @@ int henge_vm_state(void);
 /* Why it stopped (an HV_EXIT_* name), once state is 2. */
 const char *henge_vm_exit_reason(void);
 void henge_vm_stop(void);
+/* Hold the running Mac still while the app is in the background, and let it go when the app is back: the
+   Mac's CPUs wait and its clock does not see the time between, so it carries on where it was. henge_vm_pause
+   returns 1 if it paused the Mac now, 0 if there was nothing to pause, -1 if the Mac would not stop. */
+int henge_vm_pause(void);
+void henge_vm_resume(void); /* nothing happens if the Mac is not paused */
 /* Testing: sets a translation knob (core/machine.h) in the running machine; nonzero if it exists. */
 int henge_vm_knob(const char *name, int value);
 /* The memory balloon (only with HV_BALLOON set before boot): asks the guest to hand over target_mb (when >= 0)
@@ -64,6 +69,22 @@ void henge_vm_mouse_scroll(int dx, int dy);
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
 void henge_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void henge_vm_touch_button(int down); /* the pad's full press (a click) */
+/* The Mac gets a USB touchscreen, the kind a touch monitor's panel is: fingers on the Mac's picture then
+   act on its screen where they land. Before henge_vm_boot, and after henge_vm_set_display and
+   henge_vm_set_display_mm (the touchscreen is the size of the screen). */
+void henge_vm_set_touchscreen(int on);
+/* What the running Mac takes its touchscreen as: 0 nothing (it has none, or macOS has not set it up yet),
+   1 a pointer that is where the finger is (every macOS so far), 2 touches (macOS asked the panel for them). */
+int henge_vm_ts_mode(void);
+/* As a pointer: where it points, 0..32767 across the Mac's screen from its top left, and the buttons held
+   (bit 0 left, 1 right, 2 middle). */
+void henge_vm_ts_pointer(int x, int y, int buttons);
+/* As touches: a finger on the Mac's screen. phase: 0 down, 1 move, 2 up; finger a stable 1..5 per touch;
+   x, y as above. As with the trackpad, a move waits for henge_vm_ts_frame, which sends one report for all
+   the fingers that moved together. */
+void henge_vm_ts_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
+void henge_vm_ts_frame(uint32_t ts_ms);
+void henge_vm_ts_release_all(uint32_t ts_ms); /* every finger is off the screen */
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int henge_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */

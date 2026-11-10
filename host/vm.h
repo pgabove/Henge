@@ -62,6 +62,11 @@ void hv_vm_cpu_qos(void);
 int hv_vm_run_cpu0(void);
 /* Stop at the next block; the CPUs' threads end. */
 void hv_vm_stop(void);
+/* Hold the machine still, and let it go again (hv_machine_pause in core/machine.h): for the host app leaving
+   the foreground and coming back. The time between is no time to the guest. hv_vm_pause returns 1 if it
+   paused the machine now, 0 if it was paused already, -1 if the CPUs would not stop. */
+int hv_vm_pause(void);
+int hv_vm_resume(void); /* 1 if it was paused */
 void hv_vm_flush_disks(void);
 const char *hv_vm_reason_name(int reason);
 
@@ -78,6 +83,16 @@ void hv_vm_mouse_hwheel(int dx);
 void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms);
 void hv_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void hv_vm_touch_button(int down); /* the pad's full press (a click) */
+/* The touchscreen on the USB bus, in a machine made with one (hv_xhci_set_touchscreen before hv_vm_create).
+   hv_vm_ts_mode says what the guest takes it as (HV_TS_MODE_* in devices/xhci.h): nothing yet, a pointer, or
+   touches. As touches: a finger on the Mac's screen; phase 0 down, 1 move, 2 up; id a stable 1..15 per touch;
+   x, y 0..HV_TS_MAX across the screen from its top left. As a pointer: where it points and the buttons down
+   (bit 0 left, 1 right, 2 middle). Nothing happens in a machine without one. */
+int hv_vm_ts_mode(void);
+void hv_vm_ts_touch(int id, int phase, int x, int y, uint32_t ts_ms);
+void hv_vm_ts_frame(uint32_t ts_ms);       /* commit one report with every finger that moved */
+void hv_vm_ts_release_all(uint32_t ts_ms); /* every finger is off it */
+void hv_vm_ts_pointer(int x, int y, int buttons);
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int hv_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */

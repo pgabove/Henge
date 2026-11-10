@@ -112,6 +112,18 @@ int henge_vm_state(void) { return state; }
 const char *henge_vm_exit_reason(void) { return hv_vm_reason_name(exit_reason); }
 void henge_vm_stop(void) { if (state == 1) hv_vm_stop(); }
 
+int henge_vm_pause(void) {
+    if (state != 1 || install_step >= 0) return 0; /* nothing runs, or an install does: that talks to Apple and must not stall */
+    int r = hv_vm_pause();
+    fprintf(stderr, "henge: pause: %s\n", r > 0 ? "the Mac is held still" : r == 0 ? "it was paused already" : "the Mac would not stop");
+    return r;
+}
+
+void henge_vm_resume(void) {
+    if (state != 1) return;
+    if (hv_vm_resume()) fprintf(stderr, "henge: resume: the Mac runs again\n");
+}
+
 /* Testing (Autopilot.swift): a translation knob, as "knob NAME VALUE" in the Mac tool's input file. */
 int henge_vm_knob(const char *name, int value) { return state == 1 ? hv_knob_set(hv_vm_machine(), name, value) : 0; }
 
@@ -166,6 +178,17 @@ void henge_vm_mouse_scroll(int dx, int dy) {
 
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms) { if (state == 1) hv_vm_touch(finger, phase, x, y, ts_ms); }
 void henge_vm_touch_frame(uint32_t ts_ms) { if (state == 1) hv_vm_touch_frame(ts_ms); }
+
+void henge_vm_set_touchscreen(int on) {
+    uint32_t w = 0, h = 0;
+    hv_pvg_lite_get_size_mm(&w, &h);
+    hv_xhci_set_touchscreen(on, w, h);
+}
+void henge_vm_ts_touch(int finger, int phase, int x, int y, uint32_t ts_ms) { if (state == 1) hv_vm_ts_touch(finger, phase, x, y, ts_ms); }
+void henge_vm_ts_frame(uint32_t ts_ms) { if (state == 1) hv_vm_ts_frame(ts_ms); }
+void henge_vm_ts_release_all(uint32_t ts_ms) { if (state == 1) hv_vm_ts_release_all(ts_ms); }
+void henge_vm_ts_pointer(int x, int y, int buttons) { if (state == 1) hv_vm_ts_pointer(x, y, buttons); }
+int henge_vm_ts_mode(void) { return state == 1 ? hv_vm_ts_mode() : 0; }
 void henge_vm_touch_button(int down) { if (state == 1) hv_vm_touch_button(down); }
 int henge_vm_pointer(int *x, int *y) { return state == 1 ? hv_vm_pointer(x, y) : -1; }
 int henge_vm_snapshot(uint8_t *bgra, int width, int height) { return state == 1 ? hv_vm_snapshot(bgra, width, height) : -1; }

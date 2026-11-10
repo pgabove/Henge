@@ -352,8 +352,20 @@ void hv_vm_start(int cpu0, void (*on_exit)(int reason)) {
     pthread_create(&t, NULL, kicker_thread, NULL);
 }
 
+int hv_vm_pause(void) {
+    int r = hv_machine_pause(&m);
+    if (r > 0) hv_audio_hold(1); /* the CPUs are parked: nothing starts or stops a stream meanwhile */
+    return r;
+}
+
+int hv_vm_resume(void) {
+    hv_audio_hold(0);
+    return hv_machine_resume(&m);
+}
+
 void hv_vm_stop(void) {
     for (int i = 0; i < ncpus; i++) cpus[i].halted = 3; /* the dispatchers stop at the next block */
+    hv_vm_resume(); /* a paused CPU waits where no wake reaches it: let it see that it is to stop */
     hv_machine_kick_all(&m);
     for (int i = 0; i < ncpus; i++) hv_cpu_wake(&cpus[i]);
 }
@@ -464,6 +476,12 @@ void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
 }
 
 void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(board.usb, ts_ms); }
+
+void hv_vm_ts_touch(int id, int phase, int x, int y, uint32_t ts_ms) { hv_xhci_ts_touch(board.usb, id, phase, x, y, ts_ms); }
+void hv_vm_ts_frame(uint32_t ts_ms) { hv_xhci_ts_frame(board.usb, ts_ms); }
+void hv_vm_ts_release_all(uint32_t ts_ms) { hv_xhci_ts_release_all(board.usb, ts_ms); }
+void hv_vm_ts_pointer(int x, int y, int buttons) { hv_xhci_ts_pointer(board.usb, x, y, buttons); }
+int hv_vm_ts_mode(void) { return hv_xhci_ts_mode(board.usb); }
 
 void hv_vm_touch_button(int down) { hv_xhci_touch_button(board.usb, down); }
 

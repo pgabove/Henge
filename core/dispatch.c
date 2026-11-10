@@ -888,6 +888,72 @@ static void stop_the_world(HvCpu *cpu) {
     }
 }
 
+/* The host is holding the machine still (hv_machine_pause): wait here, parked, until it lets go. Every
+   path into guest code passes the check at the top of run_loop that leads here, so a parked machine
+   runs none. */
+static void pause_here(HvCpu *cpu) {
+    HvMachine *m = cpu->m;
+    hv_big_unlock(m);
+    park(cpu);
+    pthread_mutex_lock(&m->pause_mu);
+    while (m->pause_req) pthread_cond_wait(&m->pause_cv, &m->pause_mu);
+    pthread_mutex_unlock(&m->pause_mu);
+    unpark(cpu);
+    hv_big_lock(m);
+}
+
+int hv_machine_pause(HvMachine *m) {
+    pthread_mutex_lock(&m->pause_mu);
+    if (m->pause_req) {
+        pthread_mutex_unlock(&m->pause_mu);
+        return 0;
+    }
+    m->pause_t0 = 0;
+    __atomic_store_n(&m->pause_req, 1, __ATOMIC_SEQ_CST);
+    pthread_mutex_unlock(&m->pause_mu);
+    /* A CPU in guest code is active; it comes to the check on its next kick (the kicker's, or ours). One
+       that is asleep or off is not, and it reaches the check before it runs anything: it stores active
+       before it reads pause_req, and pause_req was stored before active is read here, so one of the two
+       sees the other. When none is active, none runs guest code until the resume. */
+    for (int tries = 0;; tries++) {
+        int busy = 0;
+        for (int i = 0; i < m->ncpus; i++)
+            if (m->cpus[i] && m->cpus[i]->pc_state && __atomic_load_n(&m->cpus[i]->pc_state->active, __ATOMIC_SEQ_CST)) busy = 1;
+        if (!busy) break;
+        if (tries >= 4000) { /* two seconds: something holds a CPU. Better a machine that runs on than one stuck. */
+            fprintf(stderr, "hengevm: pause: the CPUs did not all stop in time; running on\n");
+            hv_machine_resume(m);
+            return -1;
+        }
+        hv_machine_kick_all(m);
+        usleep(500);
+    }
+    /* From here to the resume is time the guest does not see. Taken once every CPU has parked: before
+       that, one of them could still have read the counter. */
+    pthread_mutex_lock(&m->pause_mu);
+    if (m->pause_req) m->pause_t0 = mach_absolute_time();
+    pthread_mutex_unlock(&m->pause_mu);
+    return 1;
+}
+
+int hv_machine_resume(HvMachine *m) {
+    pthread_mutex_lock(&m->pause_mu);
+    int was = m->pause_req;
+    if (was) {
+        if (m->pause_t0) hv_time_held += mach_absolute_time() - m->pause_t0; /* every CPU is parked: none reads it meanwhile */
+        m->pause_t0 = 0;
+        __atomic_store_n(&m->pause_req, 0, __ATOMIC_SEQ_CST);
+        pthread_cond_broadcast(&m->pause_cv);
+    }
+    pthread_mutex_unlock(&m->pause_mu);
+    if (!was) return 0;
+    /* Deadlines worked out before the pause are early now: have every CPU work its own out again. */
+    hv_machine_kick_all(m);
+    for (int i = 0; i < m->ncpus; i++)
+        if (m->cpus[i] && m->cpus[i]->pc_state) hv_cpu_wake(m->cpus[i]);
+    return 1;
+}
+
 int hv_run(HvCpu *cpu) {
     if (cpu->pc_state) cpu->pc_state->thread = mach_thread_self();
     hv_big_lock(cpu->m);
@@ -945,6 +1011,10 @@ static int run_loop(HvCpu *cpu, int one) {
             stop_the_world(cpu);
             pending_chain = NULL;
             prev_b = NULL;
+            continue;
+        }
+        if (__atomic_load_n(&m->pause_req, __ATOMIC_SEQ_CST) && !cpu->halted) {
+            pause_here(cpu); /* the host holds the machine still; the checks above come first again after */
             continue;
         }
         hv_cpu_process_requests(cpu);

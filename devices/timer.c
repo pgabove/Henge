@@ -14,7 +14,8 @@ uint64_t hv_timer_update(HvGic *g, HvCpu *cpu) {
     uint64_t now = hv_counter();
     uint64_t v = one(g, (int)cpu->index, HV_PPI_VTIMER, cpu->cntv_ctl, cpu->cntv_cval, now, cpu->cntvoff);
     uint64_t p = one(g, (int)cpu->index, HV_PPI_PTIMER, cpu->cntp_ctl, cpu->cntp_cval, now, 0);
-    if (!v) return p;
-    if (!p) return v;
-    return v < p ? v : p;
+    uint64_t due = !v ? p : !p ? v : v < p ? v : p;
+    /* Those are the guest's counter values. The dispatcher compares against the host's clock, which is
+       ahead of the guest's by the time the machine has been held paused. */
+    return due ? due + hv_time_held : 0;
 }

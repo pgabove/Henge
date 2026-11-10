@@ -7,6 +7,7 @@
 #include "memop.h"
 #include "mmu.h"
 #include "operands.h"
+#include "sysreg.h"
 
 /* A block has two parts. The hot part is the code that runs every time: the translated
    instructions. The cold part is what hardly ever does: exits not chained yet, memory slow
@@ -1466,6 +1467,11 @@ static int translate_counter(Emit *e, uint32_t insn, uint64_t pc, int physical) 
     put_lit(e, 6, COMMPAGE_TIMEBASE_OFFSET);
     put(e, LDR_X(6, 6, 0));
     put(e, ADD_LSL(r, r, 6, 0));
+    /* Less the time the host held the machine paused (hv_time_held, as hv_counter does), read each time:
+       it grows with every pause, while this code stays. */
+    put_lit(e, 6, (uint64_t)(uintptr_t)&hv_time_held);
+    put(e, LDR_X(6, 6, 0));
+    put(e, SUB_X(r, r, 6));
     if (r != rt) put(e, STR_X(r, 28, slot_of(rt)));
     if (el0) e->ool[slow].join = e->n;
     return 1;

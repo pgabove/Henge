@@ -26,8 +26,10 @@
 #define CLIDR        0x0a200023ull         /* L1 split, L2 unified */
 #define CNTFRQ       24000000ull
 
+uint64_t hv_time_held;
+
 static uint64_t counter(void) {
-    return mach_absolute_time(); /* 24 MHz on Apple silicon */
+    return mach_absolute_time() - hv_time_held; /* 24 MHz on Apple silicon; a pause is no time to the guest */
 }
 
 uint64_t hv_counter(void) {

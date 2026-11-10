@@ -25,6 +25,9 @@ enum EngineTuning {
         if d.bool(forKey: superblocksKey) { env["HV_SUPERBLOCKS"] = "1" } else { unsetenv("HV_SUPERBLOCKS") }
         if d.bool(forKey: wfiSpinKey) { env["HV_WFI_SPIN"] = "50" }
         if d.object(forKey: fastFlushKey) as? Bool == false { env["HV_FLUSH"] = "0" }
+        // The Mac's touchscreen (Settings > Touchscreen) stays a pointer whatever macOS asks of it, unless the
+        // setting beside it lets macOS have the touches themselves (devices/xhci.c, HV_TS_MODE).
+        if d.bool(forKey: Trackpad.nativeTouchKey) { unsetenv("HV_TS_MODE") } else { env["HV_TS_MODE"] = "pointer" }
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         // GPU command trace: on while Documents/trace-on exists (it is checked every frame, so it can be toggled live).
         env["HV_PVG_TRACE_FILE"] = docs.appendingPathComponent("trace-on").path

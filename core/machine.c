@@ -109,6 +109,8 @@ static int init_rest(HvMachine *m) {
     pthread_mutex_init(&m->tr_mu, NULL);
     pthread_mutex_init(&m->stw_mu, NULL);
     pthread_cond_init(&m->stw_cv, NULL);
+    pthread_mutex_init(&m->pause_mu, NULL);
+    pthread_cond_init(&m->pause_cv, NULL);
     for (int i = 0; i < HV_MAX_CPUS; i++) { /* untouched pages cost nothing, so every CPU gets its tables now */
         HvPerCpu *p = &m->percpu[i];
         p->ijc = calloc(HV_IJC_TABLES * HV_IJC_TABLE_BYTES / 8, 8);

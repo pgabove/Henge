@@ -287,6 +287,11 @@ typedef struct HvMachine {
     /* --profile: host PCs of the CPU thread sampled every millisecond, drained by the stats line. */
     uint64_t *prof;
     uint32_t prof_head, prof_tail;
+    /* The host holding the machine still (hv_machine_pause): every CPU parks at the top of its loop. */
+    int pause_req;
+    uint64_t pause_t0;        /* the host time by which every CPU had parked; 0 if the pause did not take */
+    pthread_mutex_t pause_mu;
+    pthread_cond_t pause_cv;
 } HvMachine;
 
 static inline uint32_t hv_block_hash(uint64_t va, uint64_t pa, uint32_t flags) {
@@ -367,5 +372,13 @@ void hv_cpu_kick(HvCpu *cpu);
 /* From any thread: device work is waiting for the CPU thread's tick. Makes a
    running block leave and ends a WFI sleep. */
 void hv_machine_wake(HvMachine *m);
+
+/* From a host thread that runs no guest code: hold every CPU where it is until hv_machine_resume. Returns 1
+   once none of them is running guest code, 0 if the machine was paused already, -1 if they did not all stop
+   within two seconds (the machine then runs on). The time held is no time to the guest: its counter leaves it
+   out (hv_time_held, sysreg.h), so nothing in it sees the clock jump. Devices' own threads keep going. */
+int hv_machine_pause(HvMachine *m);
+/* Returns 1 if the machine was paused, 0 if there was nothing to resume. */
+int hv_machine_resume(HvMachine *m);
 
 #endif

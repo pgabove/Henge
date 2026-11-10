@@ -72,6 +72,20 @@ static void stop(void *opaque) {
     unit_running = 0;
 }
 
+void hv_audio_hold(int hold) {
+    static int was_running;
+    if (hold) {
+        was_running = unit && unit_running;
+        if (was_running) {
+            AudioOutputUnitStop(unit);
+            unit_running = 0;
+        }
+    } else if (was_running) {
+        was_running = 0;
+        if (unit && !unit_running && AudioOutputUnitStart(unit) == noErr) unit_running = 1;
+    }
+}
+
 void hv_audio_attach(HvVirtioSnd *d) {
     d->backend = (HvVirtioSndBackend){start, stop, d};
 }

@@ -35,6 +35,11 @@ struct SessionView: View {
     @AppStorage("henge.controls.hintsShown") private var revealHintsShown = 0
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
+    /// Settings > Touchscreen: the next Mac to start gets a USB touchscreen. `touchscreenOn` is what this
+    /// session's Mac was started with, which is what counts until it stops.
+    @AppStorage(Trackpad.directTouchKey) private var directTouch = false
+    @State private var touchscreenOn = false
+    @AppStorage(BackgroundPause.key) private var pauseInBackground = true
     /// Once per install: macOS's moving wallpapers and aerial screen saver are video, decoded by the emulated
     /// CPUs (a phone ran about 30% faster with a still one).
     @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
@@ -82,7 +87,12 @@ struct SessionView: View {
                         }
                     }
                     .position(x: layout.screen.midX, y: layout.screen.midY)
-                Trackpad()
+                // With the touchscreen, this surface is its glass where it covers the Mac's picture (not when
+                // the picture is on another display: then there is nothing here to touch).
+                Trackpad(picture: touchscreenOn && !display.isExternal
+                         ? CGRect(x: layout.screen.minX - layout.touch.minX, y: layout.screen.minY - layout.touch.minY,
+                                  width: layout.screen.width, height: layout.screen.height)
+                         : nil)
                     .frame(width: layout.touch.width, height: layout.touch.height)
                     .position(x: layout.touch.midX, y: layout.touch.midY)
                 if inputMode == .volumeButtons && volumeMode == .intercept {
@@ -154,6 +164,7 @@ struct SessionView: View {
         }
         .statusBarHidden(zoomed || Device.isPad)
         .persistentSystemOverlays(.hidden)
+        .defersSystemGestures(on: .all) // a swipe from an edge is the Mac's first (its Dock, its menu bar); a second one is iOS's
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showDetails) { details }
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
@@ -167,6 +178,13 @@ struct SessionView: View {
         }
         .onChange(of: pointerNeeded) { PointerLock.set(!$0) }
         .onChange(of: scenePhase) { phase in
+            /* Out of sight, the Mac waits where it is (Settings > Background); it runs again as soon as Henge is
+               back on screen. Without this iOS freezes the app with the Mac's clock still running. */
+            if phase == .background {
+                if pauseInBackground { henge_vm_pause() }
+            } else {
+                henge_vm_resume()
+            }
             guard phase != .active else {
                 display.refresh()
                 return
@@ -573,7 +591,9 @@ struct SessionView: View {
         } else {
             henge_vm_set_display_mm(0, 0)
         }
-        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
+        touchscreenOn = directTouch
+        henge_vm_set_touchscreen(directTouch ? 1 : 0) // after the display's size: the touchscreen is that size
+        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina), touchscreen \(directTouch ? "on" : "off"), pause in the background \(pauseInBackground ? "on" : "off")")
         let rc = henge_vm_boot(mac.rom.path, mac.disk.path, mac.aux.path, mac.ecid, mac.seed, ram, Int32(cpus), &buffer, buffer.count)
         if rc != 0 {
             error = String(cString: buffer)
@@ -636,4 +656,9 @@ struct SessionView: View {
         }
         close()
     }
+}
+
+/// Settings > Background: the Mac is held still while Henge is out of sight (henge_vm_pause).
+enum BackgroundPause {
+    static let key = "henge.background.pause"
 }
