@@ -110,7 +110,12 @@ targets:
         script: |
           set -e
           cd "$SRCROOT/.."
-          make ios-lib build/henge-agent.gz build/tl-samples.dmg
+          # build/tl-samples.dmg is left out here: it builds the experimental Mac Apps sample programs
+          # (tl/tests/*.m), which are macOS binaries, and under xcodebuild's iphoneos environment that
+          # sub-make compiles them against the iOS SDK and fails (Foundation/NSURLHandle.h). libhengetl,
+          # which the app links, is built by `make ios-lib`, so Mac Apps still works -- only its bundled
+          # "Add the Sample Programs" button has nothing to add.
+          make ios-lib build/henge-agent.gz
           ./tools/build_ios_restore.sh
         basedOnDependencyAnalysis: false
     postBuildScripts:
@@ -119,8 +124,8 @@ targets:
         script: |
           set -e
           cp "$SRCROOT/../build/henge-agent.gz" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/henge-agent.gz"
+          # tl-samples.dmg is not built here (see the engine pre-build step); nothing to embed.
           rm -f "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/tl-samples.dmg"
-          cp -X "$SRCROOT/../build/tl-samples.dmg" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/tl-samples.dmg"
         basedOnDependencyAnalysis: false
       - name: Embed StikJIT
         # As in Husk: the helper links StikJIT; it lives in the app's Frameworks
