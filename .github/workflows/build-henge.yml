@@ -38,6 +38,14 @@ jobs:
         with:
           path: Henge
 
+      - name: Select the newest Xcode on the runner
+        run: |
+          set -eux
+          ls -d /Applications/Xcode_*.app || true
+          NEWEST="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$NEWEST/Contents/Developer"
+          xcodebuild -version
+
       # fetch_deps.sh copies prebuilt pieces out of a BUILT Husk checkout:
       # StikJIT.xcframework (vendored in Husk's repo, comes with checkout),
       # libhusk_rppairing.a (scripts/build_rppairing_ios.sh) and the
