@@ -167,6 +167,12 @@ void hv_pvg_lite_set_size_mm(uint32_t width_mm, uint32_t height_mm) {
     display_mm_h = height_mm;
 }
 
+/* As display_set_page reports it: the panel's real size when set, else the old 400 mm by shape. */
+void hv_pvg_lite_get_size_mm(uint32_t *width_mm, uint32_t *height_mm) {
+    *width_mm = 400, *height_mm = 400 * display_h / display_w;
+    if (display_mm_w && display_mm_h) *width_mm = display_mm_w, *height_mm = display_mm_h;
+}
+
 void hv_pvg_lite_set_mode(uint32_t width, uint32_t height) {
     display_w = width;
     display_h = height;

@@ -126,6 +126,40 @@ static const uint8_t tp_config_desc[34] = {
 
 static const char *const tp_strings[] = {NULL, "Apple Inc.", "Magic Trackpad 2", "HengeVM"};
 
+/* Port 3, when the host asked for it: a USB touchscreen. Nothing of Apple's: it is the HID
+   multi-touch digitizer ("Touch Screen") that USB touch monitors' panels are, in the layout
+   Windows documents and every such panel sends, with the two collections such panels carry
+   beside it. Three top-level collections, in this order:
+    - Touch Screen. Report ID 1 holds up to HV_TS_FINGERS contacts, the ones in use first: a tip
+      switch, in range and confidence bit, the contact identifier, and X and Y as 0..32767 across
+      the screen; then the scan time (100 us) and how many contacts the report holds. A finger
+      that lifted is in one more report with its tip switch off. Feature report 2 is the most
+      contacts it reports.
+    - Mouse. Report ID 3: three buttons and an absolute X and Y, 0..32767 across the screen. A
+      panel is this (a pointer that is where the finger is) to a host that does not ask for
+      touches. macOS up to 27.2 never asks, and uses only this collection of a touch panel.
+    - Device Configuration. Feature report 4: the device mode a host sets to choose between the
+      two (0 mouse, the power-on state; 1 or 2 touches), and a device identifier.
+   The report descriptor carries the screen's physical size, so it is made with the machine
+   (ts_build_desc). */
+
+static uint8_t ts_report_desc[768]; /* 512 bytes are used with five fingers */
+
+static uint8_t ts_device_desc[18] = {
+    18, 1, 0x00, 0x02, 0, 0, 0, 64, /* USB 2.0, class per interface, EP0 64 bytes */
+    0x09, 0x12, 0x54, 0x48,         /* vendor 0x1209 (the open hardware block), product 0x4854: no driver claims it by ID (HV_TS_USB_ID=vvvv:pppp tries another) */
+    0x00, 0x01, 1, 2, 3, 1,         /* bcdDevice 1.00, strings 1-3, one configuration */
+};
+
+static uint8_t ts_config_desc[34] = {
+    9, 2, 34, 0, 1, 1, 0, 0xa0, 50,           /* one interface, remote wakeup, 100 mA */
+    9, 4, 0, 0, 1, 3, 0, 0, 0,                /* interface 0: HID, no boot protocol */
+    9, 0x21, 0x11, 0x01, 0, 1, 0x22, 0, 0,    /* HID 1.11, one report descriptor (ts_build_desc writes its length) */
+    7, 5, 0x81, 3, 64, 0, 4,                  /* EP1 IN, interrupt, 64 bytes, every 4 ms */
+};
+
+static const char *const ts_strings[] = {NULL, "Henge", "Henge Touchscreen", "1"};
+
 struct HvXhciDev {
     const char *const *strings;
     const uint8_t *device_desc;
@@ -133,10 +167,120 @@ struct HvXhciDev {
     const uint8_t *report_desc;
     unsigned report_desc_len;
 };
-static const struct HvXhciDev devs[HV_XHCI_DEVICES] = {
+static struct HvXhciDev devs[HV_XHCI_DEVICES] = {
     {kbd_strings, kbd_device_desc, kbd_config_desc, kbd_report_desc, sizeof kbd_report_desc},
     {tp_strings, tp_device_desc, tp_config_desc, tp_report_desc, sizeof tp_report_desc},
+    {ts_strings, ts_device_desc, ts_config_desc, ts_report_desc, 0}, /* ts_build_desc sets the length */
 };
+
+static int ts_on;
+static uint32_t ts_mm_w, ts_mm_h;
+
+void hv_xhci_set_touchscreen(int on, uint32_t width_mm, uint32_t height_mm) {
+    ts_on = on;
+    ts_mm_w = width_mm;
+    ts_mm_h = height_mm;
+}
+
+/* The touchscreen's report descriptor, for a screen of the size the host gave. */
+static void ts_build_desc(void) {
+    uint8_t *p = ts_report_desc;
+    /* Physical extents in 0.1 mm (the unit is centimetres with exponent -2), which must fit 15 bits. */
+    uint32_t w = ts_mm_w ? ts_mm_w * 10 : 4000, h = ts_mm_h ? ts_mm_h * 10 : 2250;
+    if (w > 32767) w = 32767;
+    if (h > 32767) h = 32767;
+#define TS_PUT(...) do { const uint8_t b_[] = {__VA_ARGS__}; memcpy(p, b_, sizeof b_); p += sizeof b_; } while (0)
+    TS_PUT(0x05, 0x0d,                 /* usage page (digitizers) */
+           0x09, 0x04,                 /* usage (touch screen) */
+           0xa1, 0x01,                 /* collection (application) */
+           0x85, 0x01);                /*   report ID 1 */
+    for (int i = 0; i < HV_TS_FINGERS; i++) {
+        TS_PUT(0x05, 0x0d,             /*   usage page (digitizers) */
+               0x09, 0x22,             /*   usage (finger) */
+               0xa1, 0x02,             /*   collection (logical) */
+               0x15, 0x00, 0x25, 0x01, /*     0..1, */
+               0x35, 0x00, 0x45, 0x00, /*     no physical extent, */
+               0x55, 0x00, 0x65, 0x00, /*     no unit, */
+               0x75, 0x01, 0x95, 0x01, /*     one bit each: */
+               0x09, 0x42, 0x81, 0x02, /*     tip switch */
+               0x09, 0x32, 0x81, 0x02, /*     in range */
+               0x09, 0x47, 0x81, 0x02, /*     confidence */
+               0x95, 0x05, 0x81, 0x03, /*     five bits of padding */
+               0x75, 0x08, 0x95, 0x01, /*     a byte, */
+               0x25, 0x0f,             /*     0..15: */
+               0x09, 0x51, 0x81, 0x02, /*     contact identifier */
+               0x05, 0x01,             /*     usage page (generic desktop) */
+               0x75, 0x10,             /*     16 bits each, */
+               0x26, 0xff, 0x7f,       /*     0..32767, */
+               0x55, 0x0e, 0x65, 0x11, /*     in 0.01 cm, */
+               0x46, (uint8_t)w, (uint8_t)(w >> 8), /* as wide as the screen: */
+               0x09, 0x30, 0x81, 0x02, /*     X */
+               0x46, (uint8_t)h, (uint8_t)(h >> 8), /* and as high: */
+               0x09, 0x31, 0x81, 0x02, /*     Y */
+               0xc0);                  /*   end collection */
+    }
+    TS_PUT(0x05, 0x0d,                 /*   usage page (digitizers) */
+           0x55, 0x0c, 0x66, 0x01, 0x10, /* in 100 us (seconds, exponent -4), */
+           0x47, 0xff, 0xff, 0x00, 0x00, /* physical 0..65535, */
+           0x27, 0xff, 0xff, 0x00, 0x00, /* logical 0..65535, */
+           0x75, 0x10, 0x95, 0x01,     /*   16 bits: */
+           0x09, 0x56, 0x81, 0x02,     /*   scan time */
+           0x55, 0x00, 0x65, 0x00, 0x45, 0x00, /* no unit, no physical extent, */
+           0x25, HV_TS_FINGERS,        /*   0..HV_TS_FINGERS, */
+           0x75, 0x08, 0x95, 0x01,     /*   a byte: */
+           0x09, 0x54, 0x81, 0x02,     /*   contact count */
+           0x85, 0x02,                 /*   report ID 2 */
+           0x09, 0x55, 0xb1, 0x02,     /*   contact count maximum (feature) */
+           0xc0);                      /* end collection */
+    TS_PUT(0x05, 0x01,                 /* usage page (generic desktop) */
+           0x09, 0x02,                 /* usage (mouse) */
+           0xa1, 0x01,                 /* collection (application) */
+           0x85, 0x03,                 /*   report ID 3 */
+           0x09, 0x01,                 /*   usage (pointer) */
+           0xa1, 0x00,                 /*   collection (physical) */
+           0x05, 0x09,                 /*     usage page (button) */
+           0x19, 0x01, 0x29, 0x03,     /*     buttons 1 to 3, */
+           0x15, 0x00, 0x25, 0x01,     /*     0..1, */
+           0x75, 0x01, 0x95, 0x03,     /*     a bit each */
+           0x81, 0x02,
+           0x75, 0x05, 0x95, 0x01,     /*     five bits of padding */
+           0x81, 0x03,
+           0x05, 0x01,                 /*     usage page (generic desktop) */
+           0x09, 0x30, 0x09, 0x31,     /*     X and Y, */
+           0x26, 0xff, 0x7f,           /*     0..32767 */
+           0x35, 0x00, 0x46, 0xff, 0x7f, /*   (and that for the physical extent, as other absolute pointers say), */
+           0x75, 0x10, 0x95, 0x02,     /*     16 bits each, */
+           0x81, 0x02,                 /*     absolute */
+           0xc0,                       /*   end collection */
+           0xc0);                      /* end collection */
+    TS_PUT(0x05, 0x0d,                 /* usage page (digitizers) */
+           0x09, 0x0e,                 /* usage (device configuration) */
+           0xa1, 0x01,                 /* collection (application) */
+           0x85, 0x04,                 /*   report ID 4 */
+           0x09, 0x23,                 /*   usage (device settings) */
+           0xa1, 0x02,                 /*   collection (logical) */
+           0x09, 0x52, 0x09, 0x53,     /*     device mode, device identifier, */
+           0x25, 0x0a,                 /*     0..10, */
+           0x35, 0x00, 0x45, 0x00,     /*     no physical extent, */
+           0x75, 0x08, 0x95, 0x02,     /*     a byte each */
+           0xb1, 0x02,                 /*     (feature) */
+           0xc0,                       /*   end collection */
+           0xc0);                      /* end collection */
+#undef TS_PUT
+    unsigned len = (unsigned)(p - ts_report_desc);
+    devs[2].report_desc_len = len;
+    ts_config_desc[18 + 7] = (uint8_t)len;
+    ts_config_desc[18 + 8] = (uint8_t)(len >> 8);
+    /* Experiments without a rebuild: another vendor and product ID. */
+    const char *id = getenv("HV_TS_USB_ID");
+    unsigned vid = 0, pid = 0;
+    if (id && sscanf(id, "%x:%x", &vid, &pid) == 2 && vid && vid <= 0xffff && pid <= 0xffff) {
+        ts_device_desc[8] = (uint8_t)vid, ts_device_desc[9] = (uint8_t)(vid >> 8);
+        ts_device_desc[10] = (uint8_t)pid, ts_device_desc[11] = (uint8_t)(pid >> 8);
+    }
+    fprintf(stderr, "hengevm: xhci: touchscreen on port 3: %u x %u mm, USB ID %02x%02x:%02x%02x, report descriptor %u bytes\n",
+            w / 10, h / 10, ts_device_desc[9], ts_device_desc[8], ts_device_desc[11], ts_device_desc[10], len);
+}
 
 static int xlog(void) {
     static int on = -1;
@@ -255,6 +399,8 @@ static void set_ep_state(HvXhci *x, int slot, int dci, uint32_t state) {
 /* ---- endpoint 0: the devices' control requests ---- */
 
 static int tp_build_report(HvXhci *x, uint8_t *out);
+static int ts_build_report(HvXhci *x, uint8_t *out);
+static void ts_build_pointer(HvXhci *x, uint8_t *out);
 
 /* The Magic Trackpad 2's surface, in 0.01 mm (160.0 x 114.9 mm). The guest's driver
    reads it out of the sensor-surface register to scale touches into millimetres. */
@@ -331,6 +477,12 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
         fprintf(stderr, "hengevm: xhci: tp request %02x %02x value %04x index %04x len %u\n",
                 type, req, value, setup[4] | setup[5] << 8, setup[6] | setup[7] << 8);
     }
+    /* The same for the touchscreen: which requests macOS makes of it says how it takes the device. */
+    if (x->slots[slot].dev == 2 && x->ts_reqs < 60) {
+        x->ts_reqs++;
+        fprintf(stderr, "hengevm: xhci: ts request %02x %02x value %04x index %04x len %u\n",
+                type, req, value, setup[4] | setup[5] << 8, setup[6] | setup[7] << 8);
+    }
     const uint8_t *src = NULL;
     int len = 0;
     uint8_t tmp[HV_TP_REPORT_LEN + 8];
@@ -373,7 +525,27 @@ static int control(HvXhci *x, int slot, const uint8_t setup[8], uint8_t *out, in
         src = tmp, len = 1;
     } else if (type == 0xa1 && req == 1) { /* GET_REPORT: wValue is (type << 8) | report ID */
         if (x->slots[slot].dev == 0) src = x->state, len = 8;
-        else {
+        else if (x->slots[slot].dev == 2) {
+            int rtype = value >> 8, rid = value & 0xff;
+            if (rtype == 3 && rid == 0x02) { /* feature: the most contacts a report holds */
+                tmp[0] = 0x02; tmp[1] = HV_TS_FINGERS;
+                src = tmp; len = 2;
+            } else if (rtype == 3 && rid == 0x04) { /* feature: the device mode (0 mouse, 2 touches) and identifier */
+                tmp[0] = 0x04; tmp[1] = x->ts_touches ? 2 : 0; tmp[2] = 0;
+                src = tmp; len = 3;
+            } else if (rtype == 1 && rid == 0x01) { /* input: the fingers on the screen now */
+                pthread_mutex_lock(&x->mu);
+                ts_build_report(x, tmp);
+                pthread_mutex_unlock(&x->mu);
+                src = tmp; len = HV_TS_REPORT_LEN;
+            } else if (rtype == 1 && rid == 0x03) { /* input: where it points */
+                pthread_mutex_lock(&x->mu);
+                ts_build_pointer(x, tmp);
+                pthread_mutex_unlock(&x->mu);
+                src = tmp; len = HV_TS_POINTER_LEN;
+            } else
+                return -1;
+        } else {
             int rtype = value >> 8, rid = value & 0xff;
             if (rtype == 3) { /* feature: the sensor-configuration registers */
                 if (rid == 0x01) { /* the header for the register just selected */
@@ -429,14 +601,18 @@ static void run_ep0(HvXhci *x, int slot) {
     HvXhciRing *r = &x->slots[slot].ep[1];
     uint32_t trb[4];
     uint64_t at;
-    uint8_t setup[8], reply[256];
+    uint8_t setup[8], reply[1024]; /* the touchscreen's report descriptor is over 400 bytes */
     int reply_len = 0, stalled = 0;
+    int data_in = 0;       /* the data stage in progress goes to the guest */
+    uint32_t reply_sent = 0; /* how much of the reply its TRBs have taken so far */
     while (ring_peek(x, r, trb, &at)) {
         int type = (trb[3] >> 10) & 0x3f;
         int ioc = (trb[3] >> 5) & 1;
         if (type == TRB_SETUP) {
             memcpy(setup, trb, 8);
             uint16_t wlen = (uint16_t)(setup[6] | setup[7] << 8);
+            data_in = 0;
+            reply_sent = 0;
             reply_len = control(x, slot, setup, reply, wlen < sizeof reply ? wlen : (int)sizeof reply);
             stalled = reply_len < 0;
             ring_advance(r);
@@ -452,9 +628,11 @@ static void run_ep0(HvXhci *x, int slot) {
             uint32_t want = trb[2] & 0x1ffff;
             int in = (trb[3] >> 16) & 1;
             uint32_t n = 0;
+            data_in = in;
             if (in) {
                 n = reply_len < 0 ? 0 : (uint32_t)reply_len < want ? (uint32_t)reply_len : want;
                 if (n) wr(x, buf, reply, n);
+                reply_sent = n;
             } else {
                 n = want; /* SET_REPORT and friends: take the data and ignore it */
                 if (x->slots[slot].dev == 1 && want >= 2) {
@@ -469,8 +647,34 @@ static void run_ep0(HvXhci *x, int slot) {
                     } else {
                         fprintf(stderr, "hengevm: xhci: trackpad: set report %02x %02x\n", data[0], data[1]);
                     }
+                } else if (x->slots[slot].dev == 2 && want >= 1) {
+                    uint8_t data[4] = {0};
+                    rd(x, buf, data, want < 4 ? want : 4);
+                    if (x->ts_reqs < 60)
+                        fprintf(stderr, "hengevm: xhci: touchscreen: %u bytes written to it: %02x %02x %02x %02x\n", want, data[0], data[1], data[2], data[3]);
+                    /* SET_REPORT of feature report 4, the device configuration: its first byte is the device
+                       mode. A host that wants the fingers themselves sets 1 (one) or 2 (several). */
+                    if (setup[0] == 0x21 && setup[1] == 0x09 && setup[3] == 3 && setup[2] == 0x04 && data[0] == 0x04 && want >= 2) {
+                        fprintf(stderr, "hengevm: xhci: touchscreen: the guest set device mode %u (%s)%s\n", data[1], data[1] ? "touches" : "a pointer",
+                                x->ts_mode_fixed ? "; HV_TS_MODE keeps it as it is" : "");
+                        if (!x->ts_mode_fixed) {
+                            pthread_mutex_lock(&x->mu);
+                            x->ts_touches = data[1] != 0;
+                            pthread_mutex_unlock(&x->mu);
+                        }
+                    }
                 }
             }
+            ring_advance(r);
+            int isp = (trb[3] >> 2) & 1;
+            if (ioc || (isp && n < want)) transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, 1);
+        } else if (type == TRB_NORMAL && data_in) { /* a data stage in more than one TRB: the reply goes on here */
+            uint64_t buf = (uint64_t)trb[1] << 32 | trb[0];
+            uint32_t want = trb[2] & 0x1ffff;
+            uint32_t left = reply_len > 0 && (uint32_t)reply_len > reply_sent ? (uint32_t)reply_len - reply_sent : 0;
+            uint32_t n = left < want ? left : want;
+            if (n) wr(x, buf, reply + reply_sent, n);
+            reply_sent += n;
             ring_advance(r);
             int isp = (trb[3] >> 2) & 1;
             if (ioc || (isp && n < want)) transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, 1);
@@ -505,6 +709,35 @@ static void run_ep_in(HvXhci *x, int slot) {
             wr(x, buf, x->reports[x->rhead % HV_XHCI_REPORTS], n);
             x->rhead++;
             x->delivered++;
+            transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, dci);
+        }
+    } else if (s->dev == 2) {
+        while (x->ts_rhead != x->ts_rtail && ring_peek(x, r, trb, &at)) {
+            int type = (trb[3] >> 10) & 0x3f;
+            ring_advance(r);
+            if (type != TRB_NORMAL) continue;
+            uint64_t buf = (uint64_t)trb[1] << 32 | trb[0];
+            uint32_t want = trb[2] & 0x1ffff;
+            const uint8_t *rep = x->ts_reports[x->ts_rhead % HV_TS_REPORTS];
+            uint32_t len = x->ts_rlen[x->ts_rhead % HV_TS_REPORTS];
+            uint32_t n = want < len ? want : len;
+            wr(x, buf, rep, n);
+            x->ts_rhead++;
+            x->ts_delivered++;
+            if (rep[0] == 0x01) {
+                /* What the guest now knows: which fingers it has been told are down. */
+                int count = rep[3 + 6 * HV_TS_FINGERS];
+                for (int i = 0; i < count && i < HV_TS_FINGERS; i++) {
+                    const uint8_t *b = rep + 1 + 6 * i;
+                    uint32_t bit = 1u << (b[1] & 15);
+                    x->ts_guest_down = (b[0] & 1) ? x->ts_guest_down | bit : x->ts_guest_down & ~bit;
+                }
+                if (x->ts_delivered <= 24)
+                    fprintf(stderr, "hengevm: xhci: touchscreen: %u of %u bytes to the guest (%d contacts; first: id %u %s at %u,%u)\n", n, want, count,
+                            rep[2], (rep[1] & 1) ? "down" : "up", rep[3] | rep[4] << 8, rep[5] | rep[6] << 8);
+            } else if (x->ts_delivered <= 24)
+                fprintf(stderr, "hengevm: xhci: touchscreen: %u of %u bytes to the guest (pointer at %u,%u, buttons %x)\n", n, want,
+                        rep[2] | rep[3] << 8, rep[4] | rep[5] << 8, rep[1]);
             transfer_event(x, at, n < want ? CC_SHORT_PACKET : CC_SUCCESS, want - n, slot, dci);
         }
     } else {
@@ -557,7 +790,7 @@ static int address_device(HvXhci *x, int slot, uint64_t input, int bsr) {
     rd(x, input + 64, ep0, 32);
     int port = slot_ctx[6]; /* root hub port number, dword 1 bits 23:16 */
     int dev = port - 1;
-    if (dev < 0 || dev >= HV_XHCI_DEVICES) return CC_TRB_ERROR;
+    if (dev < 0 || dev >= HV_XHCI_DEVICES || (dev == 2 && !x->ts_present)) return CC_TRB_ERROR;
     x->slots[slot].dev = dev;
     uint32_t dw3 = (uint32_t)(bsr ? 1 : 2) << 27 | (uint32_t)(bsr ? 0 : slot); /* default or addressed; address = slot */
     memcpy(slot_ctx + 12, &dw3, 4);
@@ -701,11 +934,22 @@ static void run_commands(HvXhci *x) {
 /* ---- ports ---- */
 
 /* Port 1 is the full-speed keyboard; port 2 is the high-speed trackpad, as the real
-   Magic Trackpad 2 is. */
+   Magic Trackpad 2 is; port 3 is the full-speed touchscreen, or has nothing in it. */
+static int port_has_device(HvXhci *x, int p) {
+    return p < 2 || x->ts_present;
+}
+
+/* A port as a reset controller finds it: powered, with its device just connected (in Polling), or
+   powered and empty (in RxDetect). */
+static uint32_t port_initial(HvXhci *x, int p) {
+    if (!port_has_device(x, p)) return PORT_PP | 5u << PORT_PLS_SHIFT;
+    return PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p == 1 ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
+}
+
 static void port_connect(HvXhci *x) {
     for (int p = 0; p < HV_XHCI_PORTS; p++) {
-        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
-        port_event(x, p);
+        x->portsc[p] = port_initial(x, p);
+        if (port_has_device(x, p)) port_event(x, p);
     }
 }
 
@@ -714,7 +958,7 @@ static void port_write(HvXhci *x, int p, uint32_t v) {
     uint32_t s = x->portsc[p];
     s &= ~(v & PORT_CHANGES); /* write 1 to clear */
     if (v & PORT_PED) s &= ~PORT_PED;
-    if (v & PORT_PR) { /* reset: enabled, in U0 */
+    if ((v & PORT_PR) && (s & PORT_CCS)) { /* reset: enabled, in U0 (an empty port has nothing to reset) */
         s = (s & ~(0xfu << PORT_PLS_SHIFT)) | PORT_PED | PORT_PRC;
         x->portsc[p] = s;
         port_event(x, p);
@@ -760,8 +1004,17 @@ static void reset(HvXhci *x) {
     x->tp_db = 0;
     x->tp_multi_logs = 0;
     x->tp_f1_len = 0;
-    for (int p = 0; p < HV_XHCI_PORTS; p++)
-        x->portsc[p] = PORT_PP | PORT_CCS | PORT_CSC | (uint32_t)(p ? SPEED_HIGH : SPEED_FULL) << PORT_SPEED_SHIFT | 7u << PORT_PLS_SHIFT;
+    memset(x->ts_contacts, 0, sizeof x->ts_contacts);
+    x->ts_scan = 0;
+    x->ts_buttons = 0;
+    x->ts_tail_move = 0;
+    if (!x->ts_mode_fixed) x->ts_touches = 0; /* a pointer until the guest asks for touches */
+    x->ts_rhead = x->ts_rtail = 0;
+    x->ts_guest_down = 0;
+    x->ts_delivered = 0;
+    x->ts_reqs = 0;
+    x->ts_drops = 0;
+    for (int p = 0; p < HV_XHCI_PORTS; p++) x->portsc[p] = port_initial(x, p);
     update_irq(x);
 }
 
@@ -789,7 +1042,8 @@ static uint64_t bar_read(HvPciDev *d, int bar, uint64_t off, unsigned size) {
         if (size == 8 && i + 1 < 8) v |= (uint64_t)cap[i + 1] << 32;
         v >>= 8 * (off & 3);
     } else if (off >= XECP && off < XECP + 16) { /* Supported Protocol: USB 2.0 on every port */
-        static const uint32_t ext[4] = {2u | 0x0200u << 16, 0x20425355, 1u | ((1u << HV_XHCI_PORTS) - 1u) << 8, 0};
+        /* Ports 1 to HV_XHCI_PORTS (offset 1, that many). */
+        static const uint32_t ext[4] = {2u | 0x0200u << 16, 0x20425355, 1u | (uint32_t)HV_XHCI_PORTS << 8, 0};
         uint32_t i = (uint32_t)(off - XECP) / 4;
         v = ext[i];
         if (size == 8 && i + 1 < 4) v |= (uint64_t)ext[i + 1] << 32;
@@ -1112,6 +1366,188 @@ void hv_xhci_touch_button(HvXhci *x, int down) {
     hv_machine_wake(x->m);
 }
 
+/* ---- the touchscreen's reports ---- */
+
+/* The current state as report 1: the contacts in use first, the rest zero. Returns how many it holds. */
+static int ts_build_report(HvXhci *x, uint8_t *out) {
+    int n = 0;
+    memset(out, 0, HV_TS_REPORT_LEN);
+    out[0] = 0x01;
+    for (int i = 0; i < HV_TS_FINGERS; i++) {
+        const struct HvTsContact *c = &x->ts_contacts[i];
+        if (!c->in) continue;
+        uint8_t *b = out + 1 + 6 * n++;
+        b[0] = c->down ? 0x07 : 0x04; /* tip switch and in range while it touches; confident either way that it is a finger */
+        b[1] = (uint8_t)c->id;
+        b[2] = (uint8_t)c->x, b[3] = (uint8_t)(c->x >> 8);
+        b[4] = (uint8_t)c->y, b[5] = (uint8_t)(c->y >> 8);
+    }
+    out[1 + 6 * HV_TS_FINGERS] = (uint8_t)x->ts_scan;
+    out[2 + 6 * HV_TS_FINGERS] = (uint8_t)(x->ts_scan >> 8);
+    out[3 + 6 * HV_TS_FINGERS] = (uint8_t)n;
+    return n;
+}
+
+/* Whether the guest has set the touchscreen up: until it has, nothing reads its reports. */
+static int ts_configured(HvXhci *x) {
+    for (int slot = 1; slot <= HV_XHCI_SLOTS; slot++)
+        if (x->slots[slot].dev == 2 && x->slots[slot].configured) return 1;
+    return 0;
+}
+
+/* The next place in the queue of reports: returns where its length goes; the report itself is
+   x->ts_reports[(x->ts_rtail - 1) % HV_TS_REPORTS]. The caller has made sure there is room. */
+static uint8_t *ts_push(HvXhci *x) {
+    x->ts_tail_move = 0;
+    return &x->ts_rlen[x->ts_rtail++ % HV_TS_REPORTS];
+}
+
+/* Queue the current state as a report, stamped with the touch sample's clock. A finger that has
+   lifted says so in this report and is gone from the next. */
+static void ts_queue(HvXhci *x, uint32_t ts_ms) {
+    uint32_t scan = (ts_ms ? ts_ms : tp_now_ms()) * 10; /* 100 us */
+    /* Strictly increasing: reports with the same scan time are parts of one frame to the host. */
+    x->ts_scan = (int32_t)(scan - x->ts_scan) > 0 ? scan : x->ts_scan + 1;
+    if (!ts_configured(x)) {
+        /* Nobody is listening (macOS still starting, or it has no use for the device): keep nothing. */
+        if (x->ts_drops < 4) {
+            x->ts_drops++;
+            fprintf(stderr, "hengevm: xhci: touchscreen: a touch before the guest set the device up (dropped)\n");
+        }
+        x->ts_rhead = x->ts_rtail = 0;
+    } else if (x->ts_rtail - x->ts_rhead >= HV_TS_REPORTS) {
+        /* The guest has not read the last HV_TS_REPORTS reports. Start again from what it was last
+           told, in one report: the fingers on the screen now, and the ones it believes down that
+           have lifted since, so none of those stays down for ever. */
+        if (x->ts_drops < 8) {
+            x->ts_drops++;
+            fprintf(stderr, "hengevm: xhci: touchscreen: the guest is not reading its reports (%u waiting): starting again\n", x->ts_rtail - x->ts_rhead);
+        }
+        x->ts_rhead = x->ts_rtail = 0;
+        for (int id = 1; id <= 15; id++) {
+            if (!(x->ts_guest_down & (1u << id))) continue;
+            int known = 0;
+            struct HvTsContact *spare = NULL;
+            for (int i = 0; i < HV_TS_FINGERS; i++) {
+                if (x->ts_contacts[i].in && x->ts_contacts[i].id == id) known = 1;
+                if (!x->ts_contacts[i].in && !spare) spare = &x->ts_contacts[i];
+            }
+            if (known || !spare) continue;
+            spare->in = 1;
+            spare->id = id;
+            spare->down = 0; /* lifted: x and y are where this place last had a finger, which is as good as any */
+        }
+        ts_push(x)[0] = HV_TS_REPORT_LEN;
+        ts_build_report(x, x->ts_reports[(x->ts_rtail - 1) % HV_TS_REPORTS]);
+    } else {
+        ts_push(x)[0] = HV_TS_REPORT_LEN;
+        ts_build_report(x, x->ts_reports[(x->ts_rtail - 1) % HV_TS_REPORTS]);
+    }
+    for (int i = 0; i < HV_TS_FINGERS; i++)
+        if (x->ts_contacts[i].in && !x->ts_contacts[i].down) x->ts_contacts[i].in = 0;
+}
+
+/* As a pointer: report 3, the buttons and the place. */
+static void ts_build_pointer(HvXhci *x, uint8_t *out) {
+    out[0] = 0x03;
+    out[1] = (uint8_t)(x->ts_buttons & 7);
+    out[2] = (uint8_t)x->ts_px, out[3] = (uint8_t)(x->ts_px >> 8);
+    out[4] = (uint8_t)x->ts_py, out[5] = (uint8_t)(x->ts_py >> 8);
+}
+
+void hv_xhci_ts_pointer(HvXhci *x, int px, int py, int buttons) {
+    if (!x || !x->ts_present) return;
+    if (px < 0) px = 0;
+    if (px > HV_TS_MAX) px = HV_TS_MAX;
+    if (py < 0) py = 0;
+    if (py > HV_TS_MAX) py = HV_TS_MAX;
+    pthread_mutex_lock(&x->mu);
+    int same_buttons = (buttons & 7) == x->ts_buttons;
+    x->ts_px = px, x->ts_py = py, x->ts_buttons = buttons & 7;
+    if (!ts_configured(x)) {
+        if (x->ts_drops < 4) {
+            x->ts_drops++;
+            fprintf(stderr, "hengevm: xhci: touchscreen: a touch before the guest set the device up (dropped)\n");
+        }
+        x->ts_rhead = x->ts_rtail = 0;
+    } else {
+        uint32_t last = (x->ts_rtail - 1) % HV_TS_REPORTS;
+        if (x->ts_rtail != x->ts_rhead && same_buttons && x->ts_tail_move && x->ts_reports[last][0] == 0x03) {
+            /* Only the place changed, and so it had in a report the guest has not read yet: that one will do, with
+               the new place. (Not a report in which a button changed: a press or a release stays where it was.) */
+        } else {
+            /* The reports are the whole state each time: if the guest has stopped reading them, the newest alone puts it right. */
+            if (x->ts_rtail - x->ts_rhead >= HV_TS_REPORTS) x->ts_rhead = x->ts_rtail = 0;
+            ts_push(x)[0] = HV_TS_POINTER_LEN;
+            last = (x->ts_rtail - 1) % HV_TS_REPORTS;
+        }
+        ts_build_pointer(x, x->ts_reports[last]);
+        x->ts_tail_move = same_buttons;
+    }
+    pthread_mutex_unlock(&x->mu);
+    hv_machine_wake(x->m);
+}
+
+int hv_xhci_ts_mode(HvXhci *x) {
+    if (!x || !x->ts_present || !ts_configured(x)) return HV_TS_MODE_NONE;
+    return x->ts_touches ? HV_TS_MODE_TOUCH : HV_TS_MODE_POINTER;
+}
+
+void hv_xhci_ts_touch(HvXhci *x, int id, int phase, int px, int py, uint32_t ts_ms) {
+    if (!x || !x->ts_present || id < 1 || id > 15) return;
+    if (px < 0) px = 0;
+    if (px > HV_TS_MAX) px = HV_TS_MAX;
+    if (py < 0) py = 0;
+    if (py > HV_TS_MAX) py = HV_TS_MAX;
+    pthread_mutex_lock(&x->mu);
+    struct HvTsContact *c = NULL;
+    for (int i = 0; i < HV_TS_FINGERS; i++)
+        if (x->ts_contacts[i].in && x->ts_contacts[i].id == id) c = &x->ts_contacts[i];
+    if (phase == 0) {
+        if (!c) /* a new finger takes a free place; one already down under this identifier just moves */
+            for (int i = 0; i < HV_TS_FINGERS && !c; i++)
+                if (!x->ts_contacts[i].in) c = &x->ts_contacts[i];
+        if (c) {
+            c->in = 1;
+            c->id = id;
+            c->x = px;
+            c->y = py;
+            c->down = 1;
+            ts_queue(x, ts_ms);
+        }
+    } else if (c && phase == 1) {
+        c->x = px;
+        c->y = py;
+        /* no report yet: hv_xhci_ts_frame sends one for all the fingers that moved together */
+    } else if (c) {
+        c->down = 0; /* lifts where it last was */
+        ts_queue(x, ts_ms);
+    }
+    pthread_mutex_unlock(&x->mu);
+    hv_machine_wake(x->m);
+}
+
+void hv_xhci_ts_frame(HvXhci *x, uint32_t ts_ms) {
+    if (!x || !x->ts_present) return;
+    pthread_mutex_lock(&x->mu);
+    int any = 0;
+    for (int i = 0; i < HV_TS_FINGERS; i++) any |= x->ts_contacts[i].in;
+    if (any) ts_queue(x, ts_ms); /* a report without contacts says nothing */
+    pthread_mutex_unlock(&x->mu);
+    hv_machine_wake(x->m);
+}
+
+void hv_xhci_ts_release_all(HvXhci *x, uint32_t ts_ms) {
+    if (!x || !x->ts_present) return;
+    pthread_mutex_lock(&x->mu);
+    int any = 0;
+    for (int i = 0; i < HV_TS_FINGERS; i++)
+        if (x->ts_contacts[i].in) x->ts_contacts[i].down = 0, any = 1;
+    if (any) ts_queue(x, ts_ms);
+    pthread_mutex_unlock(&x->mu);
+    hv_machine_wake(x->m);
+}
+
 void hv_xhci_poll(HvXhci *x) {
     if (!x) return;
     for (int slot = 1; slot <= HV_XHCI_SLOTS; slot++)
@@ -1133,6 +1569,18 @@ HvXhci *hv_xhci_create(HvMachine *m, HvPcie *bus) {
     if (hv_pcie_attach(bus, &x->pci) < 0) {
         free(x);
         return NULL;
+    }
+    x->ts_present = ts_on;
+    if (ts_on) {
+        ts_build_desc();
+        /* Experiments without a rebuild: HV_TS_MODE=touch reports fingers whatever the guest asks for (a host
+           that reads a panel's touches without setting its device mode), =pointer never does. */
+        const char *mode = getenv("HV_TS_MODE");
+        if (mode && (!strcmp(mode, "touch") || !strcmp(mode, "pointer"))) {
+            x->ts_mode_fixed = 1;
+            x->ts_touches = !strcmp(mode, "touch");
+            fprintf(stderr, "hengevm: xhci: touchscreen: HV_TS_MODE=%s\n", mode);
+        }
     }
     reset(x);
     return x;

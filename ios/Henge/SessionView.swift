@@ -37,6 +37,10 @@ struct SessionView: View {
     @AppStorage("henge.controls.hintsShown") private var revealHintsShown = 0
     @AppStorage(VolumeClicks.inputModeKey) private var inputMode = VolumeClicks.InputMode.touchscreen
     @AppStorage(VolumeClicks.modeKey) private var volumeMode = VolumeClicks.Mode.delayHold
+    /// Settings > Touchscreen: the next Mac to start gets a USB touchscreen. `touchscreenOn` is what this
+    /// session's Mac was actually started with, which is what counts until it stops.
+    @AppStorage(Trackpad.directTouchKey) private var directTouch = false
+    @State private var touchscreenOn = false
     /// Once per install: macOS's moving wallpapers and aerial screen saver are video, decoded by the emulated
     /// CPUs (a phone ran about 30% faster with a still one).
     @AppStorage("henge.tips.stillWallpaperShown") private var stillWallpaperTipShown = false
@@ -85,7 +89,12 @@ struct SessionView: View {
                     }
                     .position(x: layout.screen.midX, y: layout.screen.midY)
                 if state != 2 {
-                    Trackpad()
+                    // With the touchscreen, this surface is its glass where it covers the Mac's picture (not when
+                    // the picture is on another display: then there is nothing here to touch).
+                    Trackpad(picture: touchscreenOn && !display.isExternal
+                             ? CGRect(x: layout.screen.minX - layout.touch.minX, y: layout.screen.minY - layout.touch.minY,
+                                      width: layout.screen.width, height: layout.screen.height)
+                             : nil)
                         .frame(width: layout.touch.width, height: layout.touch.height)
                         .position(x: layout.touch.midX, y: layout.touch.midY)
                     if inputMode == .volumeButtons && volumeMode == .intercept {
@@ -164,6 +173,7 @@ struct SessionView: View {
         }
         .statusBarHidden(zoomed || Device.isPad)
         .persistentSystemOverlays(.hidden)
+        .defersSystemGestures(on: .all) // a swipe from an edge is the Mac's first (its Dock, its menu bar); a second one is iOS's
         .sheet(isPresented: $showDetails) { details }
         .confirmationDialog("Shut down \(mac.name)?", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Shut Down", role: .destructive) { finish() }
@@ -604,7 +614,9 @@ struct SessionView: View {
         } else {
             henge_vm_set_display_mm(0, 0)
         }
-        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina)")
+        touchscreenOn = directTouch
+        henge_vm_set_touchscreen(directTouch ? 1 : 0) // after the display's size: the touchscreen is that size
+        HengeLog.log("session", "screen \(mac.screen.width)x\(mac.screen.height) retina \(mac.isRetina), touchscreen \(directTouch ? "on" : "off")")
         var rc: Int32 = -1
         if InstantResume.enabled, let at = InstantResume.saved(for: mac, ramMB: ram, cpus: cpus) {
             HengeLog.log("resume", "picking up the Mac saved \(Int(Date().timeIntervalSince(at))) s ago")

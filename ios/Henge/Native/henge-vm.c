@@ -373,6 +373,13 @@ long henge_share_agent_seen(void) { return hv_share_agent_seen(); }
 void henge_vm_set_display(uint32_t width, uint32_t height) { hv_pvg_lite_set_mode(width, height); }
 void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm) { hv_pvg_lite_set_size_mm(width_mm, height_mm); }
 
+/* Before boot (after the display size is set): the Mac gets a USB touchscreen as big as its screen. */
+void henge_vm_set_touchscreen(int on) {
+    uint32_t w = 0, h = 0;
+    hv_pvg_lite_get_size_mm(&w, &h);
+    hv_xhci_set_touchscreen(on, w, h);
+}
+
 void henge_vm_key(uint16_t code, int down) {
     if (!lock_running()) return;
     hv_vm_key(code, down);
@@ -424,6 +431,32 @@ void henge_vm_touch_frame(uint32_t ts_ms) {
 void henge_vm_touch_button(int down) {
     if (!lock_running()) return;
     hv_vm_touch_button(down);
+    pthread_rwlock_unlock(&api_lock);
+}
+int henge_vm_ts_mode(void) {
+    if (!lock_running()) return 0;
+    int result = hv_vm_ts_mode();
+    pthread_rwlock_unlock(&api_lock);
+    return result;
+}
+void henge_vm_ts_touch(int finger, int phase, int x, int y, uint32_t ts_ms) {
+    if (!lock_running()) return;
+    hv_vm_ts_touch(finger, phase, x, y, ts_ms);
+    pthread_rwlock_unlock(&api_lock);
+}
+void henge_vm_ts_frame(uint32_t ts_ms) {
+    if (!lock_running()) return;
+    hv_vm_ts_frame(ts_ms);
+    pthread_rwlock_unlock(&api_lock);
+}
+void henge_vm_ts_release_all(uint32_t ts_ms) {
+    if (!lock_running()) return;
+    hv_vm_ts_release_all(ts_ms);
+    pthread_rwlock_unlock(&api_lock);
+}
+void henge_vm_ts_pointer(int x, int y, int buttons) {
+    if (!lock_running()) return;
+    hv_vm_ts_pointer(x, y, buttons);
     pthread_rwlock_unlock(&api_lock);
 }
 void henge_vm_set_display_layer(void *layer) {

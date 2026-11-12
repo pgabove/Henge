@@ -738,6 +738,12 @@ void hv_vm_touch(int id, int phase, int x, int y, uint32_t ts_ms) {
 
 void hv_vm_touch_frame(uint32_t ts_ms) { hv_xhci_touch_frame(board.usb, ts_ms); }
 
+void hv_vm_ts_touch(int id, int phase, int x, int y, uint32_t ts_ms) { hv_xhci_ts_touch(board.usb, id, phase, x, y, ts_ms); }
+void hv_vm_ts_frame(uint32_t ts_ms) { hv_xhci_ts_frame(board.usb, ts_ms); }
+void hv_vm_ts_release_all(uint32_t ts_ms) { hv_xhci_ts_release_all(board.usb, ts_ms); }
+void hv_vm_ts_pointer(int x, int y, int buttons) { hv_xhci_ts_pointer(board.usb, x, y, buttons); }
+int hv_vm_ts_mode(void) { return hv_xhci_ts_mode(board.usb); }
+
 void hv_vm_touch_button(int down) { hv_xhci_touch_button(board.usb, down); }
 
 int hv_vm_pointer(int *x, int *y) {

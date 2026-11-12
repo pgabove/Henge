@@ -80,6 +80,10 @@ long henge_share_agent_seen(void);
 void henge_vm_set_display(uint32_t width, uint32_t height);
 /* The panel's physical size; 0, 0 for the default (a ~122 ppi, 1x screen). Before boot. */
 void henge_vm_set_display_mm(uint32_t width_mm, uint32_t height_mm);
+/* The Mac gets a USB touchscreen the size of its screen (the kind a touch monitor's panel is): fingers on
+   the Mac's picture then act on its screen where they land. After henge_vm_set_display and
+   henge_vm_set_display_mm, before henge_vm_boot. */
+void henge_vm_set_touchscreen(int on);
 void henge_vm_key(uint16_t code, int down);
 void henge_vm_key_hid(uint8_t usage, int down); /* a hardware keyboard: iOS gives each key's HID usage */
 void henge_vm_mouse_move(int dx, int dy);
@@ -92,6 +96,18 @@ void henge_vm_mouse_scroll(int dx, int dy);
 void henge_vm_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
 void henge_vm_touch_frame(uint32_t ts_ms); /* commit one frame with every finger that moved */
 void henge_vm_touch_button(int down); /* the pad's full press (a click) */
+/* What the running Mac takes its touchscreen as: 0 nothing (it has none, or macOS has not set it up yet),
+   1 a pointer that is where the finger is (every macOS so far), 2 touches (macOS asked the panel for them). */
+int henge_vm_ts_mode(void);
+/* As a pointer: where it points, 0..32767 across the Mac's screen from its top left, and the buttons held
+   (bit 0 left, 1 right, 2 middle). */
+void henge_vm_ts_pointer(int x, int y, int buttons);
+/* As touches: a finger on the Mac's screen. phase: 0 down, 1 move, 2 up; finger a stable 1..5 per touch;
+   x, y as above. As with the trackpad, a move waits for henge_vm_ts_frame, which sends one report for all
+   the fingers that moved together. */
+void henge_vm_ts_touch(int finger, int phase, int x, int y, uint32_t ts_ms);
+void henge_vm_ts_frame(uint32_t ts_ms);
+void henge_vm_ts_release_all(uint32_t ts_ms); /* every finger is off the screen */
 /* Where the guest has its pointer, in display pixels. 0, or -1 before it has one. */
 int henge_vm_pointer(int *x, int *y);
 /* A small picture of the display, BGRA, width * height * 4 bytes. 0, or -1 before anything shows. */

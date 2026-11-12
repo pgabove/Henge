@@ -18,6 +18,8 @@ struct SettingsView: View {
     @AppStorage(DeskAppearance.key) private var appearance = DeskAppearance.system
     @AppStorage(InstantResume.key) private var instantResume = false
     @AppStorage(MacAppsFeature.key) private var macApps = false
+    @AppStorage(Trackpad.directTouchKey) private var directTouch = false
+    @AppStorage(Trackpad.nativeTouchKey) private var nativeTouch = false
 
     /// The second footer paragraph: how you click, given the selected input mode.
     private var inputDescription: String {
@@ -103,6 +105,17 @@ struct SettingsView: View {
                     }
                     .listRowBackground(Desk.card)
                 }
+                Section("Touchscreen") {
+                    Toggle("Touch the Mac's screen directly", isOn: $directTouch)
+                    Text("Off, the screen is the Mac's trackpad. On, the Mac also has a USB touchscreen, as a touch monitor's panel is one, and a finger acts where it lands on the Mac's picture: tap to click there, move to drag, stay put for a right click. Two fingers scroll and pinch what is under them, and a two-finger tap is a right click. Four fingers still show Henge's controls. Applies the next time a Mac starts.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if directTouch {
+                        Toggle("Give macOS the touches if it asks", isOn: $nativeTouch)
+                        Text("Experimental. A touch panel is a pointer until macOS asks it for the touches themselves. No released macOS acts on an external panel's touches yet — it keeps them behind a hidden switch — so with this on the Mac most likely still treats your finger as a pointer. If the Mac stops answering your fingers, turn it off.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                .listRowBackground(Desk.card)
                 Section("Performance") {
                     Picker("Mac refresh rate", selection: $refreshRate) {
                         Text("30 Hz").tag(30)
