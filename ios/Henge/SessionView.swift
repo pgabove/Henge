@@ -600,6 +600,10 @@ struct SessionView: View {
         HardwareMouse.shared.start()
         let ram = GuestMemory.prepare(mac)
         HengeLog.log("session", "available memory \(henge_available_memory() >> 20) MB")
+        guard !GuestMemory.takenByMacApp else {
+            error = GuestMemory.takenByMacAppMessage
+            return
+        }
         guard ram >= 1024 else {
             error = "There is not room for this Mac's memory: it needs a few GB of free storage."
             return

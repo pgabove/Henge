@@ -530,6 +530,7 @@ static const struct { uint64_t at, bytes; } g_high_parts[3] = {
 };
 static vm_address_t g_high_hold[3];
 static bool g_high_hold_given;
+static bool g_high_hold_lent; /* let go for a Mac (henge_ios_high_room_for_mac): held again when a Mac app asks */
 
 static void henge_ios_hold_high(void)
 {
@@ -561,6 +562,10 @@ static void henge_ios_release_high_hold(void)
 HENGE_EXPORT int henge_ios_take_high_room(void **base, size_t *bytes)
 {
     if (g_high_hold_given) return 0;
+    if (g_high_hold_lent) { /* a Mac had the room: what of it is free again is held again (a block still in use is not) */
+        g_high_hold_lent = false;
+        henge_ios_hold_high();
+    }
     int n = 0;
     for (int i = 0; i < 3; i++)
         if (g_high_hold[i]) {
@@ -570,6 +575,28 @@ HENGE_EXPORT int henge_ios_take_high_room(void **base, size_t *bytes)
         }
     g_high_hold_given = n > 0;
     return n;
+}
+
+/*
+ * A Mac is about to be sized and started. HengeVM takes the JIT region through henge_ios_jit_get_mapping and never
+ * calls henge_ios_jit_allocate, so nothing let go of the room for it: held, a Mac has only the 2.5 GB after the JIT
+ * region's writable view, the engine's tables (sized from the region: ~2.4 GB of address space for 1.5 GB of code)
+ * fill that, and no size of RAM can be mapped ("Cannot build the machine", with extended virtual addressing).
+ * The room is the Mac's from here: 1, or 0 when a Mac app has it and keeps it.
+ */
+HENGE_EXPORT int henge_ios_high_room_for_mac(void)
+{
+    if (g_high_hold_given) {
+        HENGE_LOG("high hold: a Mac app has it, so a Mac has only what is left");
+        return 0;
+    }
+    bool held = g_high_hold[0] || g_high_hold[1] || g_high_hold[2];
+    henge_ios_release_high_hold();
+    if (held) {
+        g_high_hold_lent = true;
+        HENGE_LOG("high hold let go: the room is the Mac's memory's");
+    }
+    return 1;
 }
 
 static HengeDualMapping henge_prewarmed;
@@ -999,6 +1026,7 @@ HengeDualMapping henge_ios_jit_allocate(size_t bytes)
     return henge_ios_jit_allocate_real(bytes);
 }
 int henge_ios_take_high_room(void **base, size_t *bytes) { (void)base, (void)bytes; return 0; }
+int henge_ios_high_room_for_mac(void) { return 1; }
 bool henge_ios_jit_prewarm(size_t bytes) { (void)bytes; return false; }
 bool henge_ios_jit_prewarm_self(size_t bytes) { (void)bytes; return false; }
 bool henge_ios_jit_reserve_bottom(size_t end) { (void)end; return true; }
